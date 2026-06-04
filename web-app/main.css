@@ -1,0 +1,205 @@
+:root {
+    /* Viewport cap */
+    --max-width: 1536px;
+
+    /* Layout */
+    --header-height: 60px;
+    --sidebar-width: 220px;
+    --spacing: 20px;
+    --padding-top: 40px;
+
+    /* Typography */
+    --font-display: "Exo 2", sans-serif;   /* headings */
+    --font-ui: "PPNeueBit", sans-serif;         /* UI / body */
+    --font-size-base: 16px;
+    --font-size-heading: 24px;
+    --font-size-small: 12px;
+
+    /* Borders */
+    --border-width: 2px;
+    --border-radius-stone: 50%;
+    --border-radius-ui: 4px;
+
+    /* Colours */
+    --colour-bg: #FFFFFF;
+    --colour-surface: #16213e;
+    --colour-border: #0f3460;
+    --colour-text: #000000;
+    --colour-text-muted: #00000000;
+
+    /* Hexagon Geometry */
+    --hex-size: 50px; /* distance from center to vertex */
+    --hex-width: calc(var(--hex-size) * 1.73205081); /* sqrt(3) * size */
+    --hex-height: calc(var(--hex-size) * 2);
+    --hex-v-spacing: calc(var(--hex-size) * 1.5);
+    --hex-h-spacing: var(--hex-width);
+
+    /* Token Colours */
+    --player1-colour: #FF0000;
+    --player2-colour: #0000FF;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* ============================================================
+   Viewport centering + width cap
+   ============================================================ */
+body {
+    background-color: var(--colour-bg);
+    color: var(--colour-text);
+    font-family: var(--font-ui), sans-serif;
+    font-size: var(--font-size-base);
+    overflow: hidden;
+
+    /* Centre the app and cap its width */
+    max-width: var(--max-width);
+    margin-inline: auto;
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+}
+
+
+header, h1 {
+    font-family: var(--font-display);
+    font-weight: 900;
+    text-align: center;
+    font-size: 4rem;
+    padding: var(--padding-top);
+}
+
+aside:first-of-type {}
+
+aside:last-of-type {}
+
+main {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 200px); /* adjust based on header */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#board-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+}
+
+#controls {
+    position: absolute;
+    bottom: var(--spacing);
+    left: var(--spacing);
+    z-index: 10;
+}
+
+#debug-toggle {
+    padding: 8px 16px;
+    font-size: 1rem;
+    cursor: pointer;
+    background-color: var(--hex-empty);
+    border: 2px solid #333;
+    border-radius: 4px;
+}
+
+#debug-toggle.active {
+    background-color: #ffcc00;
+}
+
+#havannah-board {
+    display: block;
+    width: 800px;
+    height: 800px;
+}
+
+.hex {
+    cursor: pointer;
+    transition: fill 0.2s;
+}
+
+.hex polygon {
+    fill: #ddd;
+    stroke: #000000;
+    stroke-width: 3px; /* Overlap to fix gaps */
+}
+
+.hex:hover polygon {
+    fill: #ccc;
+    stroke: #000000;
+}
+
+.hex.player1 polygon {
+    fill: var(--player1-colour);
+}
+
+.hex.player2 polygon {
+    fill: var(--player2-colour);
+}
+
+.hex.winner polygon {
+    stroke: #ffff00;
+    stroke-width: 8px;
+    filter: drop-shadow(0 0 5px #ffff00);
+}
+
+/* Modal Styling */
+#modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+#modal-overlay.hidden {
+    display: none;
+}
+
+#win-modal {
+    background: white;
+    padding: 40px;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+#win-modal h2 {
+    font-size: 3rem;
+    margin-bottom: 10px;
+}
+
+#win-modal p {
+    font-size: 1.5rem;
+    margin-bottom: 20px;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+#restart-button, #view-board-button {
+    padding: 10px 20px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    background: var(--colour-surface);
+    color: white;
+    border: none;
+    border-radius: 4px;
+}
+
+#view-board-button {
+    background: #666;
+}

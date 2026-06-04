@@ -1,9 +1,34 @@
-<!-- In HTML Comments are written like this -->
-<!-- They can all be removed for your apps -->
 <!doctype html> <!-- This first line tells browsers to expect modern standard html 5 -->
 <html lang="en-gb"> <!-- This is indicates the page is written in British English, useful for accessibility -->
 <meta charset="utf-8"> <!-- This indicates how the file is encoded. utf-8 is standard -->
-<title>Your Web-app Title</title> <!-- All pages need a title, this will be displayed in the browser's title bar -->
-<link rel="stylesheet" href="default.css"> <!-- Import style sheet – default.css -->
+<title>Havannah</title> <!-- All pages need a title, this will be displayed in the browser's title bar -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="main.css"> <!-- Import style sheet – main.css -->
 <link rel="icon" href="./assets/favicon.png"> <!-- Import 'Favorites Icon' – favicon.png -->
 <script type="module" src="main.js"></script> <!-- Load the main script. Must be type="module". Have only one of these -->
+
+<body>
+    <h1>HAVANNAH</h1>
+    <main>
+        <div id="board-container">
+            <svg id="havannah-board" viewBox="-400 -400 800 800" width="800" height="800"></svg>
+        </div>
+    </main>
+    <div id="controls">
+        <button id="debug-toggle">Debug Mode: OFF</button>
+    </div>
+
+    <!-- Win Modal -->
+    <div id="modal-overlay" class="hidden">
+        <div id="win-modal">
+            <h2 id="win-message">Player 1 Wins!</h2>
+            <p id="win-detail">Condition: Bridge</p>
+            <div class="modal-buttons">
+                <button id="view-board-button">View Board</button>
+                <button id="restart-button">Play Again</button>
+            </div>
+        </div>
+    </div>
+</body>
