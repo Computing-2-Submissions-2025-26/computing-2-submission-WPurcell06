@@ -1,122 +1,486 @@
 /**
  * Havannah game engine.
+ *
+ * Havannah is a two-player abstract strategy game played on a hexagonal board.
+ * The first player to complete any one of three structures wins:
+ *
+ *   Ring   – a closed loop of stones that encloses at least one cell
+ *   Bridge – a chain of stones connecting any two of the six board corners
+ *   Fork   – a chain of stones connecting any three of the six board edges
+ *            (corners do not count as part of any edge)
+ *
+ * ── Coordinate system ──────────────────────────────────────────────────────
+ *
+ * The board uses axial coordinates (q, r). A cell is on the board when:
+ *
+ *   |q| ≤ n   AND   |r| ≤ n   AND   |q+r| ≤ n,   where n = BOARD_SIZE − 1
+ *
+ * The centre of the board is (0, 0). For the base-4 board used here,
+ * n = 3 and there are 37 cells in total.
+ *
+ * ── Board representation ───────────────────────────────────────────────────
+ *
+ * A board is a plain object whose keys are coordinate strings "q,r" and
+ * whose values are player tokens (1 or 2). Empty cells are simply absent.
+ *
+ *   { "0,0": 1, "1,0": 2, "-1,1": 1 }
+ *
+ * ── Design principles ──────────────────────────────────────────────────────
+ *
+ * All functions are pure: they never mutate their arguments and always
+ * return a new value. State is carried forward explicitly via Havannah.place.
+ *
  * @namespace Havannah
+ * @author William Purcell  wep24@ic.ac.uk
+ * @version 2025/26
  */
 import R from "./ramda.js";
 
 const Havannah = Object.create(null);
 
+// ── Type definitions ────────────────────────────────────────────────────────
+
 /**
- * The size of the board (base-4).
+ * A Board maps "q,r" coordinate strings to player tokens.
+ * Only occupied cells appear as keys — empty cells are absent.
+ * @memberof Havannah
+ * @typedef {Object} Board
+ */
+
+/**
+ * A player token: 1 for player one, 2 for player two.
+ * @memberof Havannah
+ * @typedef {(1|2)} Token
+ */
+
+/**
+ * A cell's contents: either a player token or 0 (empty).
+ * @memberof Havannah
+ * @typedef {(Havannah.Token|0)} Token_or_empty
+ */
+
+/**
+ * An axial coordinate pair [q, r].
+ * @memberof Havannah
+ * @typedef {number[]} Coord
+ */
+
+/**
+ * A complete game state snapshot.
+ * @memberof Havannah
+ * @typedef {Object} State
+ * @property {Havannah.Board}       board          The current board.
+ * @property {(1|2)}               current_player Whose turn it is.
+ * @property {Object|undefined}    winner         Win info, or undefined if
+ *                                                the game is still in progress.
+ */
+
+// ── Board geometry ──────────────────────────────────────────────────────────
+
+/**
+ * Cells along each side of the hexagonal board.
+ * A base-4 board (BOARD_SIZE = 4) has n = 3 and 37 cells in total.
+ * Changing this constant is the only thing needed to resize the board.
  * @constant {number}
  */
 const BOARD_SIZE = 4;
 
 /**
- * Checks if a coordinate is within the board boundaries.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {boolean} True if the coordinate is valid.
+ * Returns true if the axial coordinate (q, r) lies on the board.
+ *
+ * The hexagonal board is the intersection of three "strips" in axial space:
+ *   |q| ≤ n,   |r| ≤ n,   |q+r| ≤ n,   where n = BOARD_SIZE − 1.
+ *
+ * @param {number} q
+ * @param {number} r
+ * @returns {boolean}
  */
 const is_on_board = function (q, r) {
     const n = BOARD_SIZE - 1;
     return (
-        Math.abs(q) <= n &&
-        Math.abs(r) <= n &&
+        Math.abs(q)     <= n &&
+        Math.abs(r)     <= n &&
         Math.abs(q + r) <= n
     );
 };
 
 /**
- * Returns the neighbors of a given coordinate.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {Array<[number, number]>} Array of [q, r] neighbor pairs.
+ * Returns all board-valid neighbours of (q, r).
+ *
+ * In axial coordinates the six neighbour directions are always the same
+ * fixed offsets regardless of position — this is a key advantage of axial
+ * coordinates for hex grids.  We then filter out any that fall outside
+ * the board boundary.
+ *
+ * @param {number} q
+ * @param {number} r
+ * @returns {Havannah.Coord[]}  Between 3 and 6 neighbour pairs.
  */
 const get_neighbors = function (q, r) {
-    return [
-        [q + 1, r], [q - 1, r],
-        [q, r + 1], [q, r - 1],
-        [q + 1, r - 1], [q - 1, r + 1]
-    ].filter(function ([nq, nr]) {
-        return is_on_board(nq, nr);
-    });
+    const directions = [
+        [q + 1, r    ],
+        [q - 1, r    ],
+        [q,     r + 1],
+        [q,     r - 1],
+        [q + 1, r - 1],
+        [q - 1, r + 1]
+    ];
+    return R.filter(
+        function (coord) {
+            return is_on_board(coord[0], coord[1]);
+        },
+        directions
+    );
 };
 
 /**
- * Generates a list of all valid coordinates for the board.
- * @returns {Array<[number, number]>} Array of [q, r] pairs.
+ * Converts a "q,r" key string back into a [q, r] coordinate pair.
+ * Used when iterating over the keys of a board object.
+ *
+ * @param {string} key  A string of the form "q,r".
+ * @returns {Havannah.Coord}
+ */
+const key_to_coord = function (key) {
+    const parts = key.split(",");
+    return [Number(parts[0]), Number(parts[1])];
+};
+
+// ── Corner and edge identification ──────────────────────────────────────────
+
+/**
+ * The six corner cells of the board, listed clockwise from the top-right.
+ * On a base-4 board (n = 3) these are the cells that lie at the vertex of
+ * two edge boundaries simultaneously.
+ *
+ *          (-3, 3) ────── (0, 3)
+ *         /                      \
+ *   (-3, 0)                    (3, 0)
+ *         \                      /
+ *          (0,-3) ────── (3,-3)
+ *
+ * @type {Havannah.Coord[]}
+ */
+const CORNERS = Object.freeze([
+    [ 0,               BOARD_SIZE - 1 ],
+    [ BOARD_SIZE - 1,  0              ],
+    [ BOARD_SIZE - 1, -(BOARD_SIZE - 1)],
+    [ 0,              -(BOARD_SIZE - 1)],
+    [-(BOARD_SIZE - 1), 0             ],
+    [-(BOARD_SIZE - 1), BOARD_SIZE - 1]
+]);
+
+/**
+ * Returns true if (q, r) is one of the six board corners.
+ *
+ * @param {number} q
+ * @param {number} r
+ * @returns {boolean}
+ */
+const is_corner = function (q, r) {
+    return R.any(R.equals([q, r]), CORNERS);
+};
+
+/**
+ * Returns which edge (0–5) the cell (q, r) lies on, or undefined.
+ *
+ * The six edges are indexed clockwise:
+ *   0 = Top          (r  =  n)
+ *   1 = Top-right    (q+r =  n)
+ *   2 = Right        (q  =  n)
+ *   3 = Bottom       (r  = −n)
+ *   4 = Bottom-left  (q+r = −n)
+ *   5 = Left         (q  = −n)
+ *
+ * Corner cells satisfy two edge conditions simultaneously.  Havannah rules
+ * treat them as corners only, so this function returns undefined for corners.
+ *
+ * @param {number} q
+ * @param {number} r
+ * @returns {number|undefined}  Edge index 0–5, or undefined.
+ */
+const get_edge = function (q, r) {
+    if (is_corner(q, r)) {
+        return undefined;
+    }
+    const n = BOARD_SIZE - 1;
+    if (r     ===  n) { return 0; } // Top
+    if (q + r ===  n) { return 1; } // Top-right
+    if (q     ===  n) { return 2; } // Right
+    if (r     === -n) { return 3; } // Bottom
+    if (q + r === -n) { return 4; } // Bottom-left
+    if (q     === -n) { return 5; } // Left
+    return undefined;
+};
+
+// ── BFS: connected group ────────────────────────────────────────────────────
+
+/**
+ * Returns every cell connected to (q, r) that shares the same player token.
+ *
+ * Uses a pure recursive breadth-first search.  The queue and visited list
+ * are passed as arguments — nothing is mutated.
+ *
+ * @param {Havannah.Board} board
+ * @param {number} q
+ * @param {number} r
+ * @returns {string[]}  "q,r" strings of every cell in the connected group.
+ */
+const get_connected_group = function (board, q, r) {
+    const player = (board[`${q},${r}`] || 0);
+
+    if (player === 0) {
+        return [];
+    }
+
+    // BFS state is (queue of [q,r] pairs to visit, visited keys already seen).
+    const recur = function (queue, visited) {
+        if (queue.length === 0) {
+            return visited;
+        }
+
+        const head_q   = queue[0][0];
+        const head_r   = queue[0][1];
+        const head_key = `${head_q},${head_r}`;
+
+        // Neighbours that share the player's token, haven't been visited,
+        // and aren't already in the queue.
+        const unvisited_same_colour = R.filter(
+            function (neighbor) {
+                const neighbor_key = `${neighbor[0]},${neighbor[1]}`;
+                const in_queue = R.any(
+                    R.equals([neighbor[0], neighbor[1]]),
+                    queue
+                );
+                return (
+                    (board[neighbor_key] || 0) === player &&
+                    !R.includes(neighbor_key, visited) &&
+                    !in_queue
+                );
+            },
+            get_neighbors(head_q, head_r)
+        );
+
+        return recur(
+            R.concat(R.drop(1, queue), unvisited_same_colour),
+            R.append(head_key, visited)
+        );
+    };
+
+    return recur([[q, r]], []);
+};
+
+// ── Win-condition detection ─────────────────────────────────────────────────
+
+/**
+ * Returns true if the connected group contains a cycle — that is, a Ring.
+ *
+ * ── Why E ≥ N means a cycle exists ─────────────────────────────────────────
+ *
+ * A connected graph with N nodes is a tree when it has exactly N−1 edges.
+ * Adding any further edge creates a cycle.  So if we count nodes (N) and
+ * edges (E) in the group's induced subgraph and find E ≥ N, a cycle exists.
+ *
+ * On a hexagonal grid every cycle encloses at least one cell, which is exactly
+ * what Havannah's Ring condition requires.
+ *
+ * Edge count: for each cell, count how many of its neighbours are also in the
+ * group.  Because each edge is counted once from each endpoint, divide by 2.
+ *
+ * @param {string[]} group  "q,r" keys of the connected group.
+ * @returns {boolean}
+ */
+const check_ring = function (group) {
+    const node_count = group.length;
+
+    const count_group_neighbors = function (key) {
+        const coord = key_to_coord(key);
+        return R.filter(
+            function (neighbor) {
+                return R.includes(`${neighbor[0]},${neighbor[1]}`, group);
+            },
+            get_neighbors(coord[0], coord[1])
+        ).length;
+    };
+
+    // Each edge is tallied twice (once per endpoint), so halve the total.
+    const total_links_doubled = R.reduce(
+        function (acc, key) {
+            return acc + count_group_neighbors(key);
+        },
+        0,
+        group
+    );
+
+    const edge_count = total_links_doubled / 2;
+
+    return edge_count >= node_count;
+};
+
+/**
+ * Checks whether the stone just placed at (q, r) has completed a win.
+ * Tests Bridge → Fork → Ring in that order.
+ *
+ * @param {Havannah.Board} board  Board after the stone has been placed.
+ * @param {number} q
+ * @param {number} r
+ * @returns {{ type: string, player: number, group: string[] } | undefined}
+ */
+const check_win = function (board, q, r) {
+    const player = (board[`${q},${r}`] || 0);
+    const group  = get_connected_group(board, q, r);
+
+    // ── Bridge: does the group touch two or more corners? ──────────────────
+    const corners_in_group = R.pipe(
+        R.map(key_to_coord),
+        R.filter(function (coord) {
+            return is_corner(coord[0], coord[1]);
+        }),
+        R.length
+    )(group);
+
+    if (corners_in_group >= 2) {
+        return {"type": "Bridge", player, group};
+    }
+
+    // ── Fork: does the group touch three or more distinct edges? ───────────
+    const distinct_edges = R.pipe(
+        R.map(key_to_coord),
+        R.map(function (coord) {
+            return get_edge(coord[0], coord[1]);
+        }),
+        R.reject(R.isNil),   // discard interior cells and corners
+        R.uniq,              // each edge index counted at most once
+        R.length
+    )(group);
+
+    if (distinct_edges >= 3) {
+        return {"type": "Fork", player, group};
+    }
+
+    // ── Ring: does the group graph contain a cycle? ─────────────────────────
+    if (check_ring(group)) {
+        return {"type": "Ring", player, group};
+    }
+
+    return undefined;
+};
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Returns every valid cell on the board as an array of [q, r] pairs.
+ *
+ * Uses the Cartesian product of the axis range (−n … +n) with itself,
+ * then filters to cells that satisfy the hexagonal boundary condition.
+ * For BOARD_SIZE = 4 (n = 3) this yields 37 cells.
+ *
+ * @memberof Havannah
+ * @function
+ * @returns {Havannah.Coord[]}
  */
 Havannah.get_all_coords = function () {
-    const n = BOARD_SIZE - 1;
-    const coords = [];
-    for (let q = -n; q <= n; q += 1) {
-        for (let r = -n; r <= n; r += 1) {
-            if (is_on_board(q, r)) {
-                coords.push([q, r]);
-            }
-        }
-    }
-    return coords;
+    const n    = BOARD_SIZE - 1;
+    const axis = R.range(-n, n + 1);
+    return R.filter(
+        function (coord) {
+            return is_on_board(coord[0], coord[1]);
+        },
+        R.xprod(axis, axis)
+    );
 };
 
 /**
- * Returns an empty board.
- * @returns {Object} A new empty board object.
+ * Returns a new, empty board.
+ *
+ * @memberof Havannah
+ * @function
+ * @returns {Havannah.Board}
  */
 Havannah.new_board = function () {
     return Object.freeze(Object.create(null));
 };
 
 /**
- * Returns a new initial game state.
+ * Returns a fresh game state: empty board, player 1 to move, no winner yet.
+ *
  * @memberof Havannah
- * @returns {Object} The starting state.
+ * @function
+ * @returns {Havannah.State}
  */
 Havannah.new_game = function () {
     return Object.freeze({
-        "board": Havannah.new_board(),
-        "currentPlayer": 1
+        "board":          Havannah.new_board(),
+        "current_player": 1,
+        "winner":         undefined
     });
 };
 
 /**
- * Returns the opponent of the given player.
+ * Returns the player who moves after the given player (toggles 1 ↔ 2).
+ *
  * @memberof Havannah
- * @param {number} player The current player (1 or 2).
- * @returns {number} The next player (2 or 1).
+ * @function
+ * @param {(1|2)} player
+ * @returns {(1|2)}
  */
 Havannah.next_player = function (player) {
     return (player === 1 ? 2 : 1);
 };
 
 /**
- * Returns a new game state with the player toggled.
+ * Returns a copy of the state with the current player toggled.
+ * Does not check legality or win conditions.
+ *
  * @memberof Havannah
- * @param {Object} state The current game state.
- * @returns {Object} The new game state.
+ * @function
+ * @param {Havannah.State} state
+ * @returns {Havannah.State}
  */
 Havannah.next_turn = function (state) {
     return Object.freeze({
         ...state,
-        "currentPlayer": Havannah.next_player(state.currentPlayer)
+        "current_player": Havannah.next_player(state.current_player)
     });
 };
 
 /**
- * Returns a new board with a stone placed at the given coordinates.
+ * Returns the token at cell (q, r), or 0 if the cell is empty.
+ *
  * @memberof Havannah
- * @param {number} player 1 or 2.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @param {Object} board The current board object.
- * @returns {Object|undefined} A new board object or undefined if illegal.
+ * @function
+ * @param {number} q             Axial q coordinate.
+ * @param {number} r             Axial r coordinate.
+ * @param {Havannah.Board} board
+ * @returns {Havannah.Token_or_empty}
+ */
+Havannah.get_cell = function (q, r, board) {
+    return (board[`${q},${r}`] || 0);
+};
+
+/**
+ * Places a stone for the given player at (q, r) and returns the new board.
+ * Returns undefined if the move is illegal:
+ *   – the coordinate is off the board, or
+ *   – the cell is already occupied.
+ *
+ * This function does not enforce turn order or check for a winner.
+ * Use {@link Havannah.place} for a full state transition.
+ *
+ * @memberof Havannah
+ * @function
+ * @param {(1|2)}          player
+ * @param {number}         q
+ * @param {number}         r
+ * @param {Havannah.Board} board
+ * @returns {Havannah.Board|undefined}
  */
 Havannah.place_stone = function (player, q, r, board) {
-    if (!is_on_board(q, r) || board[`${q},${r}`] !== undefined) {
+    if (!is_on_board(q, r)) {
         return undefined;
     }
-
+    if (board[`${q},${r}`] !== undefined) {
+        return undefined;
+    }
     return Object.freeze({
         ...board,
         [`${q},${r}`]: player
@@ -124,178 +488,19 @@ Havannah.place_stone = function (player, q, r, board) {
 };
 
 /**
- * Returns the stone at a given coordinate.
+ * Applies a complete turn: places the current player's stone at (q, r),
+ * checks for a win condition, then advances to the next player.
+ *
+ * Returns undefined if:
+ *   – the move is illegal (off-board or occupied cell), or
+ *   – the game has already been won.
+ *
  * @memberof Havannah
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @param {Object} board The board object.
- * @returns {number} 0 (empty), 1, or 2.
- */
-Havannah.get_cell = function (q, r, board) {
-    return board[`${q},${r}`] || 0;
-};
-
-/**
- * Checks if a coordinate is a corner of the board.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {boolean} True if the coordinate is a corner.
- */
-const is_corner = function (q, r) {
-    const n = BOARD_SIZE - 1;
-    const corners = [
-        [0, n], [n, 0], [n, -n],
-        [0, -n], [-n, 0], [-n, n]
-    ];
-    return R.any(R.equals([q, r]), corners);
-};
-
-/**
- * Returns which edge a coordinate belongs to, excluding corners.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {number|undefined} Edge index (0-5) or undefined if not an edge.
- */
-const get_edge = function (q, r) {
-    if (is_corner(q, r)) {
-        return undefined;
-    }
-    const n = BOARD_SIZE - 1;
-    if (r === n) {
-        return 0; // Top
-    }
-    if (q + r === n) {
-        return 1; // Top-right
-    }
-    if (q === n) {
-        return 2; // Right
-    }
-    if (r === -n) {
-        return 3; // Bottom
-    }
-    if (q + r === -n) {
-        return 4; // Bottom-left
-    }
-    if (q === -n) {
-        return 5; // Left
-    }
-    return undefined;
-};
-
-/**
- * Checks for a Ring win condition.
- * A Ring is a closed loop surrounding at least one cell.
- * @param {Object} board The board object.
- * @param {number} player 1 or 2.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {boolean} True if a ring is formed.
- */
-const check_ring = function (board, player, q, r) {
-    // Find all cells (empty or opponent) not reachable from outside.
-    // If a move creates a new "captured" region, it's a ring.
-    // For simplicity, we can check if any empty/opponent neighbor of (q,r)
-    // is now part of an enclosed region.
-
-    const neighbors = get_neighbors(q, r);
-    const non_player_neighbors = neighbors.filter(function ([nq, nr]) {
-        return Havannah.get_cell(nq, nr, board) !== player;
-    });
-
-    const is_enclosed = function (start_q, start_r) {
-        const recur = function (queue, visited) {
-            if (queue.length === 0) {
-                return true; // Enclosed!
-            }
-        const curr_q = queue[0][0];
-        const curr_r = queue[0][1];
-        const curr_neighbors = get_neighbors(curr_q, curr_r);
-
-        // If we touch the boundary, it's not enclosed.
-        // Boundary means having fewer than 6 neighbors.
-        if (curr_neighbors.length < 6) {
-            return false;
-        }
-
-            const targets = curr_neighbors.filter(function (neighbor) {
-                const nq = neighbor[0];
-                const nr = neighbor[1];
-                const key = `${nq},${nr}`;
-                return (
-                    Havannah.get_cell(nq, nr, board) !== player &&
-                    !visited.includes(key) &&
-                    !R.any(R.equals([nq, nr]), queue)
-                );
-            });
-
-            return recur(
-                R.concat(R.drop(1, queue), targets),
-                R.append(`${curr_q},${curr_r}`, visited)
-            );
-        };
-        return recur([[start_q, start_r]], []);
-    };
-
-    return R.any(function ([nq, nr]) {
-        return is_enclosed(nq, nr);
-    }, non_player_neighbors);
-};
-
-/**
- * Checks if the last move won the game.
- * @param {Object} board The board object.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {Object|undefined} Win info or undefined.
- */
-const check_win = function (board, q, r) {
-    const player = Havannah.get_cell(q, r, board);
-    const group = get_connected_group(board, q, r);
-
-    // Bridge: 2+ corners
-    const corners_hit = R.pipe(
-        R.map(function (key) {
-            const parts = key.split(",");
-            return is_corner(Number(parts[0]), Number(parts[1]));
-        }),
-        R.filter(R.identity),
-        R.length
-    )(group);
-
-    if (corners_hit >= 2) {
-        return { "type": "Bridge", player, group };
-    }
-
-    // Fork: 3+ edges
-    const edges_hit = R.pipe(
-        R.map(function (key) {
-            const parts = key.split(",");
-            return get_edge(Number(parts[0]), Number(parts[1]));
-        }),
-        R.reject(R.isNil),
-        R.uniq,
-        R.length
-    )(group);
-
-    if (edges_hit >= 3) {
-        return { "type": "Fork", player, group };
-    }
-
-    // Ring: closed loop
-    if (check_ring(board, player, q, r)) {
-        return { "type": "Ring", player, group };
-    }
-
-    return undefined;
-};
-
-/**
- * Returns a new game state with a stone placed.
- * @memberof Havannah
- * @param {Object} state The current game state.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {Object|undefined} The new game state or undefined if illegal.
+ * @function
+ * @param {Havannah.State} state
+ * @param {number}         q
+ * @param {number}         r
+ * @returns {Havannah.State|undefined}
  */
 Havannah.place = function (state, q, r) {
     if (state.winner !== undefined) {
@@ -303,7 +508,7 @@ Havannah.place = function (state, q, r) {
     }
 
     const new_board = Havannah.place_stone(
-        state.currentPlayer,
+        state.current_player,
         q,
         r,
         state.board
@@ -316,86 +521,49 @@ Havannah.place = function (state, q, r) {
     const win_info = check_win(new_board, q, r);
 
     return Object.freeze({
-        "board": new_board,
-        "currentPlayer": Havannah.next_player(state.currentPlayer),
-        "winner": win_info
+        "board":          new_board,
+        "current_player": Havannah.next_player(state.current_player),
+        "winner":         win_info
     });
 };
 
 /**
- * Returns a set of all coordinates connected to the given one (same player).
- * Uses a pure functional BFS approach.
- * @param {Object} board The board object.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {Array<string>} Array of "q,r" coordinate strings in the group.
- */
-const get_connected_group = function (board, q, r) {
-    const player = Havannah.get_cell(q, r, board);
-    if (player === 0) {
-        return [];
-    }
-
-    const recur = function (queue, visited) {
-        if (queue.length === 0) {
-            return visited;
-        }
-
-        const curr_q = queue[0][0];
-        const curr_r = queue[0][1];
-        const neighbors = get_neighbors(curr_q, curr_r);
-
-        const new_neighbors = R.filter(function (neighbor) {
-            const nq = neighbor[0];
-            const nr = neighbor[1];
-            const n_key = `${nq},${nr}`;
-            return (
-                Havannah.get_cell(nq, nr, board) === player &&
-                !visited.includes(n_key) &&
-                !R.any(R.equals([nq, nr]), queue)
-            );
-        }, neighbors);
-
-        return recur(
-            R.concat(R.drop(1, queue), new_neighbors),
-            R.append(`${curr_q},${curr_r}`, visited)
-        );
-    };
-
-    return recur([[q, r]], []);
-};
-
-/**
- * Returns which of the adjacent tiles are connected (same player).
+ * Returns every direct neighbour of (q, r) that holds the same player token.
+ * Used by the UI to draw the connection-highlight overlay.
+ *
  * @memberof Havannah
- * @param {Object} state The current game state.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {Array<[number, number]>} List of adjacent connected tiles.
+ * @function
+ * @param {Havannah.State} state
+ * @param {number}         q
+ * @param {number}         r
+ * @returns {Havannah.Coord[]}
  */
-Havannah.checkAdjacent = function (state, q, r) {
+Havannah.check_adjacent = function (state, q, r) {
     const player = Havannah.get_cell(q, r, state.board);
     if (player === 0) {
         return [];
     }
-
-    const neighbors = get_neighbors(q, r);
-    return neighbors.filter(function ([nq, nr]) {
-        return Havannah.get_cell(nq, nr, state.board) === player;
-    });
+    return R.filter(
+        function (coord) {
+            return Havannah.get_cell(coord[0], coord[1], state.board) === player;
+        },
+        get_neighbors(q, r)
+    );
 };
 
 /**
- * Returns a set of all coordinates connected to the given one (same player).
+ * Returns all cells connected to (q, r) by a chain of same-player stones.
+ * Exposes the internal BFS as a public utility for the UI overlay.
+ *
  * @memberof Havannah
- * @param {Object} board The board object.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {Array<string>} Array of "q,r" coordinate strings in the group.
+ * @function
+ * @param {Havannah.Board} board
+ * @param {number}         q
+ * @param {number}         r
+ * @returns {string[]}  "q,r" strings for every cell in the connected group.
  */
 Havannah.get_connected_group = function (board, q, r) {
     return get_connected_group(board, q, r);
 };
 
 export default Object.freeze(Havannah);
-

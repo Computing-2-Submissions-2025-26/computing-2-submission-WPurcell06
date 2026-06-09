@@ -1,20 +1,28 @@
 /*jslint browser */
-import R from "./ramda.js";
+import R        from "./ramda.js";
 import Havannah from "./Havannah.js";
 
-const board_container = document.getElementById("havannah-board");
-const debug_button = document.getElementById("debug-toggle");
-const modal_overlay = document.getElementById("modal-overlay");
-const win_message = document.getElementById("win-message");
-const win_detail = document.getElementById("win-detail");
-const view_board_button = document.getElementById("view-board-button");
-const restart_button = document.getElementById("restart-button");
+// ── DOM references ───────────────────────────────────────────────────────────
 
-let gameState = Havannah.new_game();
+const board_container  = document.getElementById("havannah-board");
+const debug_button     = document.getElementById("debug-toggle");
+const modal_overlay    = document.getElementById("modal-overlay");
+const win_message      = document.getElementById("win-message");
+const win_detail       = document.getElementById("win-detail");
+const view_board_btn   = document.getElementById("view-board-button");
+const restart_btn      = document.getElementById("restart-button");
+
+// ── Mutable UI state ─────────────────────────────────────────────────────────
+
+let game_state = Havannah.new_game();
 let debug_mode = false;
 
+// ── Debug mode toggle ────────────────────────────────────────────────────────
+
 /**
- * Toggles the debug mode.
+ * Toggles debug mode on/off.
+ * When debug mode is active, clicking a hex logs its connected group
+ * to the console instead of placing a stone.
  */
 const toggle_debug = function () {
     debug_mode = !debug_mode;
@@ -28,49 +36,69 @@ const toggle_debug = function () {
 
 debug_button.addEventListener("click", toggle_debug);
 
+// ── Hex tile creation ────────────────────────────────────────────────────────
+
 /**
- * Creates a hexagonal tile element.
- * @param {number} q Axial q coordinate.
- * @param {number} r Axial r coordinate.
- * @returns {SVGElement} The hexagon group element.
+ * Creates one hexagonal SVG tile for cell (q, r) and wires up its click
+ * handler.  The tile is a <g> element containing a <polygon>.
+ *
+ * Geometry: flat-top orientation.
+ *   pixel-x = size * 1.5 * q
+ *   pixel-y = size * (sqrt(3)/2 * q  +  sqrt(3) * r)
+ *
+ * @param {number} q  Axial q coordinate.
+ * @param {number} r  Axial r coordinate.
+ * @returns {SVGGElement}
  */
 const create_hex = function (q, r) {
-    const size = 50;
+    const size  = 50;
     const sqrt3 = Math.sqrt(3);
     const width = size * sqrt3;
 
-    // Axial to Pixel conversion (Flat-top orientation)
-    const x = size * (1.5 * q);
-    const y = size * ((sqrt3 / 2) * q + sqrt3 * r);
+    // Convert axial coords to SVG pixel position (flat-top hex orientation).
+    const pixel_x = size * (1.5 * q);
+    const pixel_y = size * ((sqrt3 / 2) * q + sqrt3 * r);
 
     const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
     g.classList.add("hex");
     g.dataset.q = q;
     g.dataset.r = r;
-    g.setAttribute("transform", `translate(${x}, ${y})`);
+    g.setAttribute("tabindex", "0");
+    g.setAttribute("transform", `translate(${pixel_x}, ${pixel_y})`);
 
     g.addEventListener("click", function () {
         if (debug_mode) {
-            const stone = Havannah.get_cell(q, r, gameState.board);
-            const connected = Havannah.checkAdjacent(gameState, q, r);
-            console.log(`DEBUG: [q:${q}, r:${r}] | Player: ${stone}`);
+            // Debug mode: log connection info instead of placing a stone.
+            const stone = Havannah.get_cell(q, r, game_state.board);
+            console.log(`DEBUG [q:${q}, r:${r}] player: ${stone}`);
             if (stone !== 0) {
-                const group = Havannah.get_connected_group(gameState.board, q, r);
-                console.log(`Connected neighbors: ${JSON.stringify(connected)}`);
-                console.log(`Full connected group: ${JSON.stringify(group)}`);
+                const adjacent = Havannah.check_adjacent(game_state, q, r);
+                const group    = Havannah.get_connected_group(
+                    game_state.board,
+                    q,
+                    r
+                );
+                console.log("Adjacent same-colour:", JSON.stringify(adjacent));
+                console.log("Full connected group:", JSON.stringify(group));
             }
             return;
         }
 
-        const nextState = Havannah.place(gameState, q, r);
-        if (nextState !== undefined) {
-            const playerClass = `player${gameState.currentPlayer}`;
-            g.classList.add(playerClass);
-            gameState = nextState;
-            window.gameState = gameState;
+        // Normal play: try to place the current player's stone.
+        const next_state = Havannah.place(game_state, q, r);
 
-            if (gameState.winner !== undefined) {
-                // Highlight winning group
+        if (next_state !== undefined) {
+            // Add the CSS class for the player who just moved
+            // (use game_state, not next_state, because game_state still holds
+            // the player who clicked).
+            const player_class = `player${game_state.current_player}`;
+            g.classList.add(player_class);
+
+            game_state       = next_state;
+            window.game_state = game_state;
+
+            if (game_state.winner !== undefined) {
+                // Highlight every stone in the winning group.
                 R.forEach(function (coord_key) {
                     const parts = coord_key.split(",");
                     const el = document.querySelector(
@@ -79,73 +107,81 @@ const create_hex = function (q, r) {
                     if (el) {
                         el.classList.add("winner");
                     }
-                }, gameState.winner.group);
+                }, game_state.winner.group);
 
-                // Show modal
-                win_message.textContent = `Player ${gameState.winner.player} Wins!`;
-                win_detail.textContent = `Condition: ${gameState.winner.type}`;
+                // Show the win modal.
+                win_message.textContent = (
+                    `Player ${game_state.winner.player} Wins!`
+                );
+                win_detail.textContent = (
+                    `Condition: ${game_state.winner.type}`
+                );
                 modal_overlay.classList.remove("hidden");
             }
         }
     });
 
-    const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-    // Points for a flat-top hexagon centered at (0,0)
+    // Flat-top hexagon: six vertices relative to the tile's centre.
     const points = R.pipe(
         R.map(R.join(",")),
         R.join(" ")
     )([
-        [-size, 0],
-        [-size / 2, -width / 2],
-        [size / 2, -width / 2],
-        [size, 0],
-        [size / 2, width / 2],
-        [-size / 2, width / 2]
+        [-size,      0         ],
+        [-size / 2, -width / 2 ],
+        [ size / 2, -width / 2 ],
+        [ size,      0         ],
+        [ size / 2,  width / 2 ],
+        [-size / 2,  width / 2 ]
     ]);
 
+    const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
     polygon.setAttribute("points", points);
     g.appendChild(polygon);
 
     return g;
 };
 
+// ── Board rendering ──────────────────────────────────────────────────────────
+
 /**
- * Renders the game board.
+ * Creates and appends one hex tile for every cell on the board.
+ * Called once at startup.
  */
 const render_board = function () {
-    const coords = Havannah.get_all_coords();
     R.forEach(function (coord) {
-        const q = coord[0];
-        const r = coord[1];
-        const hex = create_hex(q, r);
+        const hex = create_hex(coord[0], coord[1]);
         board_container.appendChild(hex);
-    }, coords);
+    }, Havannah.get_all_coords());
 };
+
+// ── Restart ──────────────────────────────────────────────────────────────────
 
 /**
- * Restarts the game.
+ * Resets the game to its initial state and clears all visual classes
+ * from every hex tile.
  */
 const restart_game = function () {
-    gameState = Havannah.new_game();
-    window.gameState = gameState;
+    game_state        = Havannah.new_game();
+    window.game_state = game_state;
     modal_overlay.classList.add("hidden");
-    
-    // Clear the board
-    const hexes = document.querySelectorAll(".hex");
+
     R.forEach(function (hex) {
         hex.classList.remove("player1", "player2", "winner");
-    }, hexes);
+    }, Array.from(document.querySelectorAll(".hex")));
 };
 
-restart_button.addEventListener("click", restart_game);
+restart_btn.addEventListener("click", restart_game);
 
-view_board_button.addEventListener("click", function () {
+view_board_btn.addEventListener("click", function () {
     modal_overlay.classList.add("hidden");
 });
 
+// ── Init ─────────────────────────────────────────────────────────────────────
+
 document.addEventListener("DOMContentLoaded", function () {
     render_board();
-    // Expose Havannah and gameState to the window for console debugging
-    window.Havannah = Havannah;
-    window.gameState = gameState;
+
+    // Expose to the browser console for manual testing / debugging.
+    window.Havannah  = Havannah;
+    window.game_state = game_state;
 });

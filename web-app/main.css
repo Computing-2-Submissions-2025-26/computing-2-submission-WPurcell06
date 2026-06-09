@@ -25,7 +25,7 @@
     --colour-surface: #16213e;
     --colour-border: #0f3460;
     --colour-text: #000000;
-    --colour-text-muted: #00000000;
+    --colour-text-muted: #888888;
 
     /* Hexagon Geometry */
     --hex-size: 50px; /* distance from center to vertex */
