@@ -123,6 +123,48 @@ main {
     transition: fill 0.2s;
 }
 
+/* ── Focus styles ─────────────────────────────────────────────────────────────
+   :focus        fires on ALL focus events (mouse click AND keyboard Tab).
+   :focus-visible fires ONLY when the browser judges keyboard navigation
+                  was used — i.e. Tab, arrow keys, not mouse clicks.
+
+   Pattern: suppress the default ring on all focus, restore a custom
+   indicator only for :focus-visible.  This way mouse users see nothing
+   extra but keyboard users still get a clear signal.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* Hex tiles: SVG elements don't honour CSS outline, so we suppress it and use
+   the JS focus overlay instead (see main.js — #focus-overlay). */
+.hex:focus {
+    outline: none;
+}
+
+/* Focus overlay polygon — a single element permanently at the end of the SVG
+   that repositions itself over the keyboard-focused tile.  pointer-events:none
+   ensures it never intercepts mouse clicks on the tile beneath it. */
+.focus-ring {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 5px;
+    pointer-events: none;
+}
+
+.focus-ring.active {
+    stroke: #ffcc00;
+    filter: brightness(1.1);
+}
+
+/* Regular buttons (debug toggle, restart, view board). */
+button:focus {
+    outline: none;
+}
+
+button:focus-visible {
+    outline: 3px solid #ffcc00;
+    outline-offset: 3px;
+    border-radius: var(--border-radius-ui);
+}
+
 .hex polygon {
     fill: #ddd;
     stroke: #000000;
@@ -143,9 +185,9 @@ main {
 }
 
 .hex.winner polygon {
-    stroke: #ffff00;
-    stroke-width: 8px;
-    filter: drop-shadow(0 0 5px #ffff00);
+    stroke: #ffcc00;
+    stroke-width: 4px;
+    filter: brightness(1.35);
 }
 
 /* Modal Styling */

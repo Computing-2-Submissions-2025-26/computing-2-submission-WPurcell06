@@ -470,4 +470,151 @@ describe("Ring win", function () {
         }
     );
 
+    // ── Ring edge case: the 3-cycle false positive ────────────────────────
+    //
+    // In a hexagonal adjacency graph, three cells can be mutually adjacent,
+    // forming a triangle (3-cycle): e.g. (0,0), (1,0), and (0,1) are all
+    // neighbours of one another.
+    //
+    // The old E ≥ N algorithm counted E = 3 edges and N = 3 nodes and
+    // incorrectly fired a Ring win.  The fix (flood fill from the boundary)
+    // correctly sees that these three cells enclose no hex face at all — they
+    // only share a single grid vertex, not a grid cell.
+    //
+    // This test is a regression guard: it must NEVER pass if E ≥ N is used.
+
+    it(
+        "three mutually adjacent stones (a triangle) do not trigger a Ring win " +
+        "[regression: old E≥N algorithm falsely fired here]",
+        function () {
+            // (0,0), (1,0), (0,1) are pairwise adjacent in axial coords.
+            // They form a 3-cycle but enclose no cell — not a Ring.
+            const pre_board = build_board(1, [[0, 0], [1, 0]]);
+            const result    = Havannah.place(make_state(pre_board, 1), 0, 1);
+
+            assert.strictEqual(result.winner, undefined);
+        }
+    );
+
+    // ── Ring edge case: a larger ring enclosing multiple cells ─────────────
+    //
+    // A ring does not have to be the minimum 6-stone loop.  Here eight stones
+    // form a closed loop that encloses two interior cells — (0,0) and (1,0).
+    //
+    // Ring path (clockwise):
+    //   (-1,0) → (0,-1) → (1,-1) → (2,-1) → (2,0) → (1,1) → (0,1) → (-1,1) → (-1,0)
+
+    it(
+        "a larger ring of eight stones enclosing two cells is a Ring win",
+        function () {
+            const pre_board = build_board(1, [
+                [-1, 0], [0, -1], [1, -1], [2, -1], [2, 0], [1, 1], [0, 1]
+            ]);
+            // (-1,1) closes the loop
+            const result = Havannah.place(make_state(pre_board, 1), -1, 1);
+
+            assert.strictEqual(result.winner.type, "Ring");
+        }
+    );
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Fork edge cases", function () {
+// ─────────────────────────────────────────────────────────────────────────────
+
+    // ── Corner cells do NOT count as edges ─────────────────────────────────
+    //
+    // Havannah rules: corners are corners, not edges.  A path that reaches two
+    // edges AND a corner touches only two distinct edges, not three.
+    //
+    // Path:  (-3,1) → (-2,1) → (-1,1) → (-1,2) → (-1,3) → (0,3)
+    //   (-3,1) is on the Left edge (q = −3)
+    //   (-1,3) is on the Top edge  (r =  3)
+    //   (0, 3) is a CORNER — it counts as a corner, not an edge
+    //
+    // Two distinct edges < three required → no Fork.
+
+    it(
+        "a path through two edges and one corner is not a Fork win " +
+        "(corner does not count as an edge)",
+        function () {
+            const pre_board = build_board(1, [
+                [-3, 1], [-2, 1], [-1, 1], [-1, 2], [-1, 3]
+            ]);
+            // (0,3) is a corner, not an edge cell
+            const result = Havannah.place(make_state(pre_board, 1), 0, 3);
+
+            assert.strictEqual(result.winner, undefined);
+        }
+    );
+
+    // ── Disconnected stones on three edges are not a Fork ──────────────────
+    //
+    // A Fork requires ONE connected group that spans three edges.
+    // Disconnected stones on three different edges do not count.
+
+    it(
+        "three stones each on a different edge but not connected are not a Fork",
+        function () {
+            // (-3,1): Left edge.  (-1,3): Top edge.  These two are not adjacent.
+            // Place (1,2) on the Top-right edge — also not adjacent to either.
+            const pre_board = build_board(1, [[-3, 1], [-1, 3]]);
+            const result    = Havannah.place(make_state(pre_board, 1), 1, 2);
+
+            assert.strictEqual(result.winner, undefined);
+        }
+    );
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Player 2 can win", function () {
+// ─────────────────────────────────────────────────────────────────────────────
+
+    // All tests above used player 1.  Win detection must work equally for
+    // player 2 — the player number is passed through from the board token.
+
+    it(
+        "player 2 wins a Bridge by connecting the top corner (0,3) " +
+        "to the bottom corner (0,−3)",
+        function () {
+            // Player 2 stones along the q = 0 column, from (0,−3) to (0,3).
+            const pre_board = build_board(2, [
+                [0, -3], [0, -2], [0, -1], [0, 0], [0, 1], [0, 2]
+            ]);
+            const result = Havannah.place(make_state(pre_board, 2), 0, 3);
+
+            assert.strictEqual(result.winner.type,   "Bridge");
+            assert.strictEqual(result.winner.player, 2);
+        }
+    );
+
+    it(
+        "player 2 wins a Fork by connecting three edges",
+        function () {
+            // Same geometry as the player 1 Fork test but using player 2 tokens.
+            const pre_board = build_board(2, [
+                [-3, 1], [-2, 1], [-1, 1], [-1, 2], [-1, 3], [0, 2]
+            ]);
+            const result = Havannah.place(make_state(pre_board, 2), 1, 2);
+
+            assert.strictEqual(result.winner.type,   "Fork");
+            assert.strictEqual(result.winner.player, 2);
+        }
+    );
+
+    it(
+        "player 2 wins a Ring by closing a hexagonal loop",
+        function () {
+            const pre_board = build_board(2, [
+                [1, 0], [0, 1], [-1, 1], [-1, 0], [0, -1]
+            ]);
+            const result = Havannah.place(make_state(pre_board, 2), 1, -1);
+
+            assert.strictEqual(result.winner.type,   "Ring");
+            assert.strictEqual(result.winner.player, 2);
+        }
+    );
+
 });

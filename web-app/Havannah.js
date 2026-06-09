@@ -134,6 +134,23 @@ const get_neighbors = function (q, r) {
 };
 
 /**
+ * Every valid cell on the board, precomputed once at module load.
+ * Shared by Havannah.get_all_coords (public) and check_ring (private).
+ * @type {Havannah.Coord[]}
+ */
+const ALL_COORDS = Object.freeze(
+    R.filter(
+        function (coord) {
+            return is_on_board(coord[0], coord[1]);
+        },
+        R.xprod(
+            R.range(-(BOARD_SIZE - 1), BOARD_SIZE),
+            R.range(-(BOARD_SIZE - 1), BOARD_SIZE)
+        )
+    )
+);
+
+/**
  * Converts a "q,r" key string back into a [q, r] coordinate pair.
  * Used when iterating over the keys of a board object.
  *
@@ -272,48 +289,93 @@ const get_connected_group = function (board, q, r) {
 // ── Win-condition detection ─────────────────────────────────────────────────
 
 /**
- * Returns true if the connected group contains a cycle — that is, a Ring.
+ * Returns true if the given player's stones form a Ring on the board.
  *
- * ── Why E ≥ N means a cycle exists ─────────────────────────────────────────
+ * ── Why E ≥ N is wrong for hex grids ───────────────────────────────────────
  *
- * A connected graph with N nodes is a tree when it has exactly N−1 edges.
- * Adding any further edge creates a cycle.  So if we count nodes (N) and
- * edges (E) in the group's induced subgraph and find E ≥ N, a cycle exists.
+ * In a hexagonal adjacency graph, three mutually adjacent cells form a
+ * 3-cycle (triangle): e.g. (0,0)–(1,0)–(0,1)–(0,0).  Here E = N = 3,
+ * so E ≥ N fires — but this triangle encloses no cell at all.  It only
+ * shares a single grid *vertex*, not a grid *face*.
  *
- * On a hexagonal grid every cycle encloses at least one cell, which is exactly
- * what Havannah's Ring condition requires.
+ * ── Correct approach: flood fill from the board boundary ───────────────────
  *
- * Edge count: for each cell, count how many of its neighbours are also in the
- * group.  Because each edge is counted once from each endpoint, divide by 2.
+ * A Ring is defined by enclosure: the player's stones must surround at least
+ * one cell so that cell cannot reach the board boundary without crossing a
+ * player stone.
  *
- * @param {string[]} group  "q,r" keys of the connected group.
+ * Algorithm:
+ *   1. Collect all non-player cells (empty or opponent's stones).
+ *   2. Start a BFS from every non-player cell that lies on the board boundary.
+ *      (Boundary cells have fewer than 6 valid neighbours.)
+ *   3. Flood through non-player cells only.
+ *   4. If any non-player cell was never reached → it is enclosed → Ring.
+ *
+ * @param {Havannah.Board} board
+ * @param {(1|2)}          player
  * @returns {boolean}
  */
-const check_ring = function (group) {
-    const node_count = group.length;
-
-    const count_group_neighbors = function (key) {
-        const coord = key_to_coord(key);
-        return R.filter(
-            function (neighbor) {
-                return R.includes(`${neighbor[0]},${neighbor[1]}`, group);
-            },
-            get_neighbors(coord[0], coord[1])
-        ).length;
+const check_ring = function (board, player) {
+    // Predicate: cell is NOT one of the player's stones.
+    const is_non_player = function (coord) {
+        return (board[`${coord[0]},${coord[1]}`] || 0) !== player;
     };
 
-    // Each edge is tallied twice (once per endpoint), so halve the total.
-    const total_links_doubled = R.reduce(
-        function (acc, key) {
-            return acc + count_group_neighbors(key);
+    const non_player_cells = R.filter(is_non_player, ALL_COORDS);
+
+    // Seed the flood fill from every non-player cell on the board boundary.
+    // Boundary cells have fewer than 6 valid neighbours (they're on the edge).
+    const boundary_seeds = R.filter(
+        function (coord) {
+            return (
+                is_non_player(coord) &&
+                get_neighbors(coord[0], coord[1]).length < 6
+            );
         },
-        0,
-        group
+        ALL_COORDS
     );
 
-    const edge_count = total_links_doubled / 2;
+    // Pure recursive BFS — queue holds [q, r] pairs, visited holds "q,r" keys.
+    const bfs = function (queue, visited) {
+        if (queue.length === 0) {
+            return visited;
+        }
 
-    return edge_count >= node_count;
+        const head_q   = queue[0][0];
+        const head_r   = queue[0][1];
+        const head_key = `${head_q},${head_r}`;
+
+        const unvisited_non_player = R.filter(
+            function (neighbor) {
+                const neighbor_key = `${neighbor[0]},${neighbor[1]}`;
+                const in_queue = R.any(
+                    R.equals([neighbor[0], neighbor[1]]),
+                    queue
+                );
+                return (
+                    is_non_player(neighbor) &&
+                    !R.includes(neighbor_key, visited) &&
+                    !in_queue
+                );
+            },
+            get_neighbors(head_q, head_r)
+        );
+
+        return bfs(
+            R.concat(R.drop(1, queue), unvisited_non_player),
+            R.append(head_key, visited)
+        );
+    };
+
+    const reachable_from_boundary = bfs(boundary_seeds, []);
+
+    // Ring confirmed if any non-player cell is unreachable from the boundary.
+    return R.any(
+        function (coord) {
+            return !R.includes(`${coord[0]},${coord[1]}`, reachable_from_boundary);
+        },
+        non_player_cells
+    );
 };
 
 /**
@@ -357,8 +419,8 @@ const check_win = function (board, q, r) {
         return {"type": "Fork", player, group};
     }
 
-    // ── Ring: does the group graph contain a cycle? ─────────────────────────
-    if (check_ring(group)) {
+    // ── Ring: are any non-player cells enclosed by the player's stones? ──────
+    if (check_ring(board, player)) {
         return {"type": "Ring", player, group};
     }
 
@@ -379,14 +441,7 @@ const check_win = function (board, q, r) {
  * @returns {Havannah.Coord[]}
  */
 Havannah.get_all_coords = function () {
-    const n    = BOARD_SIZE - 1;
-    const axis = R.range(-n, n + 1);
-    return R.filter(
-        function (coord) {
-            return is_on_board(coord[0], coord[1]);
-        },
-        R.xprod(axis, axis)
-    );
+    return ALL_COORDS;
 };
 
 /**

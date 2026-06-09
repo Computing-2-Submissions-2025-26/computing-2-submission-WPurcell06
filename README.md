@@ -104,15 +104,15 @@ stone of the same colour reachable from the newly placed stone.
 interior cells and corners (they return `undefined`); remove duplicates.
 If ≥ 3 distinct edge indices remain → Fork win.
 
-**4. Ring check** — count nodes N (group size) and edges E (adjacent pairs
-within the group).  Each edge is counted once from each endpoint, so
-`E = total_neighbor_links / 2`.
-If `E ≥ N` → a cycle exists → Ring win.
+**4. Ring check** — a flood-fill from the board boundary through all
+non-player cells.  If any non-player cell is unreachable from the boundary,
+it is enclosed by the player's stones → Ring win.
 
-> **Why does E ≥ N imply a cycle?**
-> A connected graph with N nodes is a tree when it has exactly N−1 edges.
-> Any extra edge creates a cycle.  On a hex grid every cycle encloses
-> at least one cell, satisfying Havannah's Ring definition.
+> **Why flood-fill instead of counting edges?**
+> The simpler E ≥ N heuristic (extra edges → cycle) fails on hex grids
+> because three mutually adjacent stones form a 3-cycle (E = N = 3) yet
+> enclose no cell.  Flood-fill is exact: a cell is enclosed if and only if
+> it cannot be reached from outside the player's group.
 
 ---
 
@@ -127,6 +127,18 @@ web-app/
 └── tests/
     └── Havannah.test.js  Mocha unit tests (run with: npm test)
 ```
+
+---
+
+## Controls
+
+| Action | Input |
+|--------|-------|
+| Place a stone | Click the cell, or focus it with **Tab** then press **Enter** or **Space** |
+| Navigate cells | **Tab** / **Shift-Tab** |
+| Toggle debug mode | Click the **Debug Mode** button |
+
+A yellow highlight appears around the focused cell during keyboard navigation only; mouse clicks show no highlight.
 
 ---
 
@@ -145,14 +157,19 @@ The test suite covers:
 - **Bridge** win — two-corner connection detected; one-corner path is not a win
 - **Fork** win — three-edge connection detected; two-edge path is not a win
 - **Ring** win — closed hexagonal loop detected; open five-stone chain is not a win
+- **Ring edge cases** — three mutually adjacent stones (3-cycle) are *not* a Ring;
+  a larger 8-stone loop *is* a Ring
+- **Fork edge cases** — a path through a corner instead of a third edge is *not* a
+  Fork; a disconnected group touching three edges is *not* a Fork
+- **Player 2** — all three win conditions work identically for player 2
 
 ---
 
 ## Debug mode
 
-Click the **Debug Mode** button in the app, then click any stone already on the
-board.  The browser console logs the stone's coordinates, its direct
-same-colour neighbours, and its full connected group.
+Enable **Debug Mode** with the button, then click (or Tab + Enter) any stone
+already on the board.  The browser console logs the stone's coordinates, its
+direct same-colour neighbours, and its full connected group.
 
 ---
 
